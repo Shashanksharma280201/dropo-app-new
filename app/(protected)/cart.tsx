@@ -6,8 +6,9 @@ import { Icon } from "@/components/Icon";
 import { COLORS } from "@/constants/Colors";
 import { SIZES } from "@/constants/sizes";
 import api from "@/lib/api";
+import { calculateCartSummary, createEmptyCartSummary } from "@/lib/cartUtils";
 import { getMockCart } from "@/lib/mockData";
-import type { CartItem, CartResponse } from "@/lib/types";
+import type { CartResponse } from "@/lib/types";
 
 export default function CartScreen() {
   const router = useRouter();
@@ -49,7 +50,7 @@ export default function CartScreen() {
         );
         return {
           items,
-          summary: calculateSummary(items),
+          summary: calculateCartSummary(items),
         };
       });
     },
@@ -70,7 +71,7 @@ export default function CartScreen() {
         const items = previous.items.filter((item) => item.id !== id);
         return {
           items,
-          summary: calculateSummary(items),
+          summary: calculateCartSummary(items),
         };
       });
     },
@@ -87,13 +88,7 @@ export default function CartScreen() {
     onSuccess: () => {
       queryClient.setQueryData<CartResponse>(["cart"], {
         items: [],
-        summary: {
-          subtotal: 0,
-          tax: 0,
-          deliveryFee: 0,
-          discount: 0,
-          total: 0,
-        },
+        summary: createEmptyCartSummary(),
       });
     },
   });
@@ -155,7 +150,7 @@ export default function CartScreen() {
         )}
         ListEmptyComponent={
           cartQuery.isLoading ? null : (
-            <Text style={styles.emptyState}>Your cart is empty. Explore the menu to add items.</Text>
+            <Text style={styles.emptyState}>Please add an item you like.</Text>
           )
         }
       />
@@ -201,26 +196,6 @@ const SummaryRow = ({ label, value, bold }: { label: string; value: number; bold
     </Text>
   </View>
 );
-
-const calculateSummary = (items: CartItem[]): CartResponse["summary"] => {
-  if (!items.length) {
-    return {
-      subtotal: 0,
-      tax: 0,
-      deliveryFee: 0,
-      discount: 0,
-      total: 0,
-    };
-  }
-
-  const subtotal = items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-  const tax = Math.round(subtotal * 0.05);
-  const deliveryFee = 20;
-  const discount = 0;
-  const total = subtotal + tax + deliveryFee - discount;
-
-  return { subtotal, tax, deliveryFee, discount, total };
-};
 
 const styles = StyleSheet.create({
   container: {

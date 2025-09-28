@@ -1,29 +1,50 @@
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  BottomSheetBackdrop,
+  type BottomSheetBackdropProps,
+  BottomSheetModal,
+  BottomSheetModalProvider,
+  BottomSheetView,
+} from "@gorhom/bottom-sheet";
+import { LinearGradient } from "expo-linear-gradient";
+import { router, useLocalSearchParams } from "expo-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
+  Dimensions,
   Image,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import type { Href } from "expo-router";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FlatList } from "react-native-gesture-handler";
 
 import { Icon } from "@/components/Icon";
 import { COLORS } from "@/constants/Colors";
 import { SIZES } from "@/constants/sizes";
 import api from "@/lib/api";
 import { getMockProductDetail } from "@/lib/mockData";
-import type { ProductDetail } from "@/lib/types";
+import { getProductImageSource } from "@/lib/productImages";
+import { calculateCartSummary, createEmptyCartSummary } from "@/lib/cartUtils";
+import type { CartItem, CartResponse, ProductAddonGroup, ProductDetail, ProductVariant } from "@/lib/types";
 
-export default function ProductScreen() {
-  const router = useRouter();
+const { height: ScreenHeight } = Dimensions.get("window");
+
+const ProductDetails = () => {
+  const insets = useSafeAreaInsets();
   const { slug: rawSlug } = useLocalSearchParams<{ slug?: string }>();
   const slug = Array.isArray(rawSlug) ? rawSlug[0] : rawSlug;
-  const [quantity, setQuantity] = useState(1);
+
+  const posY = useSharedValue(70);
+  const opacity = useSharedValue(0);
+
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
   const [selectedAddons, setSelectedAddons] = useState<Record<string, string[]>>({});
 
@@ -47,30 +68,21 @@ export default function ProductScreen() {
     },
   });
 
-  const addToCart = useMutation({
-    mutationFn: async () => {
-      if (!selectedVariantId) throw new Error("Select a variant");
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    },
-    onSuccess: () => {
-      const cartRoute: Href = "/(protected)/cart";
-      Alert.alert("Added", "Item added to cart", [
-        { text: "Go to cart", onPress: () => router.push(cartRoute) },
-        { text: "Continue", style: "cancel" },
-      ]);
-    },
-    onError: () => {
-      Alert.alert("Error", "Unable to add item to cart right now.");
-    },
-  });
-
-  const product = productQuery.data;
+  useEffect(() => {
+    posY.value = withTiming(7, {
+      duration: 1000,
+    });
+    opacity.value = withTiming(1, {
+      duration: 1000,
+    });
+  }, [opacity, posY]);
 
   useEffect(() => {
-    setQuantity(1);
     setSelectedVariantId(null);
     setSelectedAddons({});
   }, [slug]);
+
+  const product = productQuery.data;
 
   useEffect(() => {
     if (!product) return;
@@ -91,163 +103,521 @@ export default function ProductScreen() {
     setSelectedAddons(defaults);
   }, [product]);
 
+  const bottomSheetModalRef = useRef<BottomSheetModal>(null);
+  const queryClient = useQueryClient();
+
+  const renderBackdrop = useCallback(
+    (props: BottomSheetBackdropProps) => (
+      <BottomSheetBackdrop
+        {...props}
+        opacity={1}
+        disappearsOnIndex={-1}
+        appearsOnIndex={2}
+      />
+    ),
+    []
+  );
+
+  const addToCart = useMutation({
+    mutationFn: async (): Promise<CartItem> => {
+      if (!product) {
+        throw new Error("Missing product");
+      }
+      if (!selectedVariantId) {
+        throw new Error("Select a variant");
+      }
+
+      const variant =
+        product.variants.find((item) => item.id === selectedVariantId) ?? product.variants[0];
+      if (!variant) {
+        throw new Error("Variant unavailable");
+      }
+
+      const selectedAddonItems = product.addonGroups.flatMap((group) => {
+        const selections = selectedAddons[group.id] ?? [];
+        return group.options
+          .filter((option) => selections.includes(option.id))
+          .map((option) => ({
+            id: option.id,
+            name: option.name,
+            priceDelta: Number(option.priceDelta ?? 0),
+            group: { id: group.id, name: group.name },
+          }));
+      });
+
+      const unitPrice = getVariantPrice(product, variant.id) + getAddonPrice(product, selectedAddons);
+
+      const cartItem: CartItem = {
+        id: `local-cart-${Date.now()}`,
+        quantity: 1,
+        notes: null,
+        unitPrice,
+        lineTotal: unitPrice,
+        product: {
+          id: product.id,
+          name: product.name,
+          slug: product.slug,
+          imageUrl: product.imageUrl,
+        },
+        variant: {
+          id: variant.id,
+          name: variant.name,
+          price: Number(variant.price ?? 0),
+        },
+        addons: selectedAddonItems,
+      };
+
+      try {
+        await api.post("/cart", {
+          productId: product.id,
+          variantId: variant.id,
+          addons: selectedAddonItems.map((addon) => addon.id),
+        });
+      } catch {
+        // fall back to local cart update if the API is unavailable
+      }
+
+      return cartItem;
+    },
+    onSuccess: (cartItem) => {
+      queryClient.setQueryData<CartResponse>(["cart"], (previous) => {
+        const base = previous ?? {
+          items: [] as CartItem[],
+          summary: createEmptyCartSummary(),
+        };
+        const items = [...base.items, cartItem];
+        return {
+          items,
+          summary: calculateCartSummary(items),
+        };
+      });
+
+      Alert.alert("Added", "Item added to cart", [
+        {
+          text: "Go to cart",
+          onPress: () => router.push("/(protected)/cart" as const),
+        },
+        { text: "Continue", style: "cancel" },
+      ]);
+      bottomSheetModalRef.current?.dismiss();
+    },
+    onError: () => {
+      Alert.alert("Error", "Unable to add item to cart right now.");
+    },
+  });
+
+  const rStyles = useAnimatedStyle(() => {
+    return {
+      top: `${posY.value}%`,
+      opacity: opacity.value,
+    };
+  }, []);
+
+  const onPressAdd = () => {
+    if (!product) return;
+    bottomSheetModalRef.current?.present("80%");
+  };
+
+  const onToggleAddon = useCallback(
+    (group: ProductAddonGroup, optionId: string) => {
+      setSelectedAddons((prev) => {
+        const current = prev[group.id] ?? [];
+        if (group.selectionType === "SINGLE") {
+          return {
+            ...prev,
+            [group.id]: current.includes(optionId) ? [] : [optionId],
+          };
+        }
+        const exists = current.includes(optionId);
+        const next = exists ? current.filter((id) => id !== optionId) : [...current, optionId];
+        return {
+          ...prev,
+          [group.id]: next,
+        };
+      });
+    },
+    []
+  );
+
+  const onSelectVariant = (variantId: string) => {
+    setSelectedVariantId(variantId);
+  };
+
+  const variantPrice = useMemo(() => {
+    if (!product) return 0;
+    return getVariantPrice(product, selectedVariantId);
+  }, [product, selectedVariantId]);
+
+  const addonPrice = useMemo(() => {
+    if (!product) return 0;
+    return getAddonPrice(product, selectedAddons);
+  }, [product, selectedAddons]);
+
+  const totalPrice = variantPrice + addonPrice;
+
+  const highestVariantPrice = useMemo(() => {
+    if (!product?.variants?.length) return null;
+    const values = product.variants.map((item) => Number(item.price ?? 0));
+    if (!values.length) return null;
+    return Math.max(...values);
+  }, [product]);
+
+  const heroImageSource = useMemo(() => {
+    if (!product) return require("@/assets/images/coffee.png");
+    return getProductImageSource({ slug: product.slug, imageUrl: product.imageUrl });
+  }, [product]);
+
   if (!slug) {
     return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Something went wrong. Try again.</Text>
+      <View style={styles.fallbackContainer}>
+        <Text style={styles.fallbackText}>Something went wrong. Try again.</Text>
       </View>
     );
   }
 
   if (!product) {
     return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>
+      <View style={styles.fallbackContainer}>
+        <Text style={styles.fallbackText}>
           {productQuery.isLoading ? "Loading..." : "Product not found"}
         </Text>
       </View>
     );
   }
 
-  const unitPrice = getVariantPrice(product, selectedVariantId) + getAddonPrice(product, selectedAddons);
-  const totalPrice = unitPrice * quantity;
-
   return (
-    <View style={{ flex: 1, backgroundColor: COLORS.primary100 }}>
-      <ScrollView contentContainerStyle={{ paddingBottom: SIZES.padding.xxl }}>
-        <View style={styles.heroSection}>
-          <Pressable onPress={() => router.back()} style={styles.backButton}>
-            <Icon icon="back" size={24} />
-          </Pressable>
-          <Image source={{ uri: product.imageUrl }} style={styles.heroImage} resizeMode="contain" />
-          <Text style={styles.heroTitle}>{product.name}</Text>
-          <Text style={styles.heroSubtitle}>{product.description}</Text>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Choose a size</Text>
-          <View style={styles.chipGroup}>
-            {product.variants.map((variant) => {
-              const isSelected = selectedVariantId === variant.id;
-              return (
-                <Pressable
-                  key={variant.id}
-                  onPress={() => setSelectedVariantId(variant.id)}
-                  style={({ pressed }) => [
-                    styles.chip,
-                    {
-                      backgroundColor: isSelected
-                        ? COLORS.primary300
-                        : pressed
-                        ? `${COLORS.primary300}55`
-                        : `${COLORS.primary200}77`,
-                    },
-                  ]}
-                >
-                  <Text style={styles.chipLabel}>{variant.name}</Text>
-                  <Text style={styles.chipPrice}>₹{Number(variant.price).toFixed(0)}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
-
-        {product.addonGroups.map((group) => (
-          <View key={group.id} style={styles.section}>
-            <Text style={styles.sectionTitle}>{group.name}</Text>
-            <View style={styles.chipGroup}>
-              {group.options.map((option) => {
-                const selected = selectedAddons[group.id]?.includes(option.id);
-                return (
-                  <Pressable
-                    key={option.id}
-                    onPress={() =>
-                      toggleAddonSelection(group, option.id, selectedAddons, setSelectedAddons)
-                    }
-                    style={({ pressed }) => [
-                      styles.chip,
-                      {
-                        backgroundColor: selected
-                          ? COLORS.primary300
-                          : pressed
-                          ? `${COLORS.primary300}55`
-                          : `${COLORS.primary200}77`,
-                      },
-                    ]}
-                  >
-                    <Text style={styles.chipLabel}>{option.name}</Text>
-                    {Number(option.priceDelta) > 0 ? (
-                      <Text style={styles.chipPrice}>+₹{Number(option.priceDelta).toFixed(0)}</Text>
-                    ) : null}
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-        ))}
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Nutrition</Text>
-          <Text style={styles.nutritionText}>
-            {Object.entries(product.nutrition)
-              .map(([key, value]) => `${value} ${key}`)
-              .join(" · ")}
-          </Text>
-        </View>
-
-        {product.suggestions.length ? (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Goes well with</Text>
-            <View style={{ flexDirection: "row", gap: SIZES.padding.md }}>
-              {product.suggestions.slice(0, 3).map((suggestion) => (
-                <Pressable
-                  key={suggestion.id}
-                  onPress={() =>
-                    router.push({ pathname: "/(protected)/product/[slug]", params: { slug: suggestion.slug } })
-                  }
-                  style={styles.suggestionCard}
-                >
-                  <Image source={{ uri: suggestion.imageUrl }} style={styles.suggestionImage} />
-                  <Text style={styles.suggestionLabel}>{suggestion.name}</Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        ) : null}
-      </ScrollView>
-
-      <View style={styles.footer}>
-        <View style={styles.quantityContainer}>
-          <Pressable
-            onPress={() => setQuantity((qty) => Math.max(1, qty - 1))}
-            style={styles.quantityButton}
-          >
-            <Text style={styles.quantityButtonText}>-</Text>
-          </Pressable>
-          <Text style={styles.quantityValue}>{quantity}</Text>
-        </View>
-        <Pressable
-          style={({ pressed }) => [
-            styles.addToCartButton,
+    <>
+      <View style={styles.screen}>
+        <LinearGradient
+          colors={[COLORS.primary100, COLORS.primary300, COLORS.primary400]}
+          style={[StyleSheet.absoluteFill, styles.gradient]}
+        />
+        <View
+          style={[
+            styles.screen,
             {
-              backgroundColor: pressed ? COLORS.primary300 : COLORS.primary400,
+              padding: SIZES.padding.xl,
+              paddingTop: insets.top + SIZES.padding.xl,
             },
           ]}
-          onPress={() => addToCart.mutate()}
         >
-          <Text style={styles.addToCartText}>
-            {addToCart.isPending ? "Adding..." : `Add • ₹${totalPrice.toFixed(0)}`}
-          </Text>
+          <View style={styles.headerRow}>
+            <Pressable onPress={() => router.back()}>
+              <Icon icon="back" size={24} />
+            </Pressable>
+
+            <Pressable style={styles.cartButton} onPress={() => router.push("/(protected)/cart")}
+            >
+              <Icon icon="bag" size={24} />
+            </Pressable>
+          </View>
+
+          <Image source={heroImageSource} style={styles.heroImage} />
+          <Animated.Text style={[styles.heroTitle, rStyles]}>{product.name}</Animated.Text>
+          <DetailCard
+            product={product}
+            totalPrice={totalPrice}
+            compareAtPrice={highestVariantPrice && highestVariantPrice > totalPrice ? highestVariantPrice : null}
+            onAddToCart={onPressAdd}
+          />
+        </View>
+      </View>
+      <BottomSheetModalProvider>
+        <BottomSheetModal
+          backdropComponent={renderBackdrop}
+          snapPoints={["85%"]}
+          backgroundStyle={styles.bottomSheetBackground}
+          animationConfigs={{ duration: 300 }}
+          handleComponent={null}
+          ref={bottomSheetModalRef}
+        >
+          <BottomSheetView style={styles.bottomSheetContent}>
+            <View style={styles.bottomSheetHeader}>
+              <Text style={styles.bottomSheetTitle}>{product.name}</Text>
+              <Pressable
+                onPress={() => bottomSheetModalRef.current?.dismiss()}
+                style={({ pressed }) => ({
+                  backgroundColor: pressed ? `${COLORS.primary300}aa` : COLORS.primary100,
+                  borderRadius: SIZES.radius.full,
+                  padding: SIZES.padding.sm,
+                })}
+              >
+                <Icon icon="close" size={24} />
+              </Pressable>
+            </View>
+            <View style={styles.bottomSheetBody}>
+              <View style={styles.sheetSections}>
+                {product.variants.length ? (
+                  <VariantOptions
+                    variants={product.variants}
+                    selectedVariantId={selectedVariantId}
+                    onSelect={onSelectVariant}
+                  />
+                ) : null}
+                {product.addonGroups.map((group) => (
+                  <AddonGroupOptions
+                    key={group.id}
+                    group={group}
+                    selectedAddons={selectedAddons[group.id] ?? []}
+                    onToggle={(optionId) => onToggleAddon(group, optionId)}
+                  />
+                ))}
+                {product.suggestions.length ? (
+                  <Suggestions suggestions={product.suggestions} />
+                ) : null}
+              </View>
+              <Pressable
+                style={({ pressed }) => ({
+                  backgroundColor: pressed ? COLORS.primary200 : COLORS.primary300,
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  padding: SIZES.padding.lg,
+                  borderRadius: SIZES.radius.md,
+                })}
+                onPress={() => addToCart.mutate()}
+                disabled={addToCart.isPending}
+              >
+                <Text style={styles.addToCartText}>
+                  {addToCart.isPending ? "Adding..." : "ADD TO CART"}
+                </Text>
+                <Text style={styles.addToCartText}>₹{totalPrice.toFixed(0)}</Text>
+              </Pressable>
+            </View>
+          </BottomSheetView>
+        </BottomSheetModal>
+      </BottomSheetModalProvider>
+    </>
+  );
+};
+
+const VariantOptions = ({
+  variants,
+  selectedVariantId,
+  onSelect,
+}: {
+  variants: ProductVariant[];
+  selectedVariantId: string | null;
+  onSelect: (variantId: string) => void;
+}) => {
+  return (
+    <View style={styles.optionSection}>
+      <Text style={styles.optionLabel}>What size do you prefer</Text>
+      <View style={styles.segmentedGroup}>
+        {variants.map((variant, index) => {
+          const isActive = selectedVariantId === variant.id;
+          return (
+            <Pressable
+              key={variant.id}
+              onPress={() => onSelect(variant.id)}
+              style={({ pressed }) => [
+                styles.selectionButton,
+                index === 0 && styles.selectionButtonLeft,
+                index === variants.length - 1 && styles.selectionButtonRight,
+                {
+                  backgroundColor: isActive
+                    ? COLORS.primary300
+                    : pressed
+                    ? `${COLORS.primary300}55`
+                    : COLORS.primary200,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.optionKey,
+                  { color: isActive ? COLORS.primary100 : COLORS.primary500 },
+                ]}
+              >
+                {variant.name}
+              </Text>
+              <Text
+                style={[
+                  styles.optionValue,
+                  { color: isActive ? COLORS.primary100 : COLORS.primary500 },
+                ]}
+              >
+                ₹{Number(variant.price).toFixed(0)}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+};
+
+const AddonGroupOptions = ({
+  group,
+  selectedAddons,
+  onToggle,
+}: {
+  group: ProductAddonGroup;
+  selectedAddons: string[];
+  onToggle: (optionId: string) => void;
+}) => {
+  return (
+    <View style={styles.optionSection}>
+      <Text style={styles.optionLabel}>{group.name}</Text>
+      <View style={styles.segmentedGroup}>
+        {group.options.map((option, index) => {
+          const selected = selectedAddons.includes(option.id);
+          return (
+            <Pressable
+              key={option.id}
+              onPress={() => onToggle(option.id)}
+              style={({ pressed }) => [
+                styles.selectionButton,
+                index === 0 && styles.selectionButtonLeft,
+                index === group.options.length - 1 && styles.selectionButtonRight,
+                {
+                  backgroundColor: selected
+                    ? COLORS.primary300
+                    : pressed
+                    ? `${COLORS.primary300}55`
+                    : COLORS.primary200,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.optionKey,
+                  { color: selected ? COLORS.primary100 : COLORS.primary500 },
+                ]}
+              >
+                {option.name}
+              </Text>
+              {Number(option.priceDelta) > 0 ? (
+                <Text
+                  style={[
+                    styles.optionValue,
+                    { color: selected ? COLORS.primary100 : COLORS.primary500 },
+                  ]}
+                >
+                  +₹{Number(option.priceDelta).toFixed(0)}
+                </Text>
+              ) : null}
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+};
+
+const Suggestions = ({
+  suggestions,
+}: {
+  suggestions: ProductDetail["suggestions"];
+}) => {
+  return (
+    <View style={styles.optionSection}>
+      <Text style={styles.optionLabel}>Goes well with</Text>
+      <FlatList
+        data={suggestions}
+        horizontal
+        contentContainerStyle={styles.suggestionsList}
+        showsHorizontalScrollIndicator={false}
+        renderItem={({ item }) => (
+          <Pressable
+            key={item.id}
+            style={styles.suggestionCard}
+            onPress={() =>
+              router.push({ pathname: "/(protected)/product/[slug]", params: { slug: item.slug } })
+            }
+          >
+            <Image
+              source={getProductImageSource({
+                slug: item.slug,
+                imageUrl: item.imageUrl,
+              })}
+              style={styles.suggestionImage}
+            />
+            <View style={styles.suggestionOverlay}>
+              <View />
+              <View>
+                <Text style={[styles.suggestionText, { fontSize: SIZES.font.md }]}>
+                  {item.name}
+                </Text>
+              </View>
+            </View>
+          </Pressable>
+        )}
+        keyExtractor={(item) => item.id}
+      />
+    </View>
+  );
+};
+
+const DetailCard = ({
+  product,
+  totalPrice,
+  compareAtPrice,
+  onAddToCart,
+}: {
+  product: ProductDetail;
+  totalPrice: number;
+  compareAtPrice: number | null;
+  onAddToCart: () => void;
+}) => {
+  return (
+    <View style={styles.detailCard}>
+      <Text style={styles.detailTitle}>{product.name}</Text>
+      <View style={styles.divider} />
+      <View style={styles.detailBody}>
+        <Text style={styles.detailDescription}>{product.description}</Text>
+        <View style={styles.nutritionRow}>
+          <Icon icon="veg" size={16} style={styles.nutritionIcon} />
+          {Object.entries(product.nutrition).map(([key, value], index) => (
+            <Text
+              key={key}
+              style={[
+                styles.nutritionText,
+                { opacity: key === "calories" ? 0.7 : 0.5 },
+              ]}
+            >
+              {`${value} ${key}`}
+              {index === Object.keys(product.nutrition).length - 1 ? "" : " · "}
+            </Text>
+          ))}
+        </View>
+      </View>
+      <View style={styles.divider} />
+      <View style={styles.priceRow}>
+        <View style={styles.priceColumn}>
+          {compareAtPrice ? (
+            <Text style={styles.priceOriginal}>₹{compareAtPrice.toFixed(0)}</Text>
+          ) : null}
+          <Text style={styles.priceDiscounted}>₹{totalPrice.toFixed(0)}</Text>
+        </View>
+        <Pressable
+          onPress={onAddToCart}
+          style={({ pressed }) => ({
+            paddingHorizontal: SIZES.padding.xxl,
+            paddingVertical: SIZES.padding.sm,
+            borderRadius: SIZES.radius.md,
+            justifyContent: "center",
+            alignItems: "center",
+            backgroundColor: pressed ? `${COLORS.primary300}88` : COLORS.primary200,
+            transform: [
+              {
+                scale: pressed ? 0.98 : 1,
+              },
+            ],
+          })}
+        >
+          <Text style={styles.addButtonText}>Customize</Text>
         </Pressable>
       </View>
     </View>
   );
-}
+};
+
+export default ProductDetails;
 
 function getVariantPrice(product: ProductDetail, variantId: string | null) {
-  if (!variantId) return 0;
+  if (!variantId) return Number(product.variants[0]?.price ?? 0);
   const variant = product.variants.find((item) => item.id === variantId);
-  return Number(variant?.price ?? 0);
+  return Number(variant?.price ?? product.variants[0]?.price ?? 0);
 }
 
 function getAddonPrice(product: ProductDetail, selectedAddons: Record<string, string[]>) {
@@ -263,161 +633,218 @@ function getAddonPrice(product: ProductDetail, selectedAddons: Record<string, st
   return total;
 }
 
-function toggleAddonSelection(
-  group: ProductDetail["addonGroups"][number],
-  optionId: string,
-  selectedAddons: Record<string, string[]>,
-  setSelectedAddons: Dispatch<SetStateAction<Record<string, string[]>>>,
-) {
-  const current = selectedAddons[group.id] ?? [];
-  if (group.selectionType === "SINGLE") {
-    setSelectedAddons({
-      ...selectedAddons,
-      [group.id]: current.includes(optionId) ? [] : [optionId],
-    });
-  } else {
-    const exists = current.includes(optionId);
-    const next = exists ? current.filter((id) => id !== optionId) : [...current, optionId];
-    setSelectedAddons({
-      ...selectedAddons,
-      [group.id]: next,
-    });
-  }
-}
-
 const styles = StyleSheet.create({
-  loadingContainer: {
+  screen: {
     flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
   },
-  loadingText: {
-    fontFamily: "Lato",
-    color: COLORS.primary400,
+  gradient: {
+    zIndex: -2,
   },
-  heroSection: {
-    padding: SIZES.padding.xl,
-    alignItems: "center",
-    gap: SIZES.padding.md,
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingBottom: SIZES.padding.xl,
   },
-  backButton: {
+  cartButton: {
     alignSelf: "flex-start",
-    padding: SIZES.padding.sm,
-    borderRadius: SIZES.radius.full,
-    backgroundColor: `${COLORS.primary200}55`,
   },
   heroImage: {
-    width: "100%",
-    height: 280,
+    height: ScreenHeight * 0.45,
+    aspectRatio: 0.6,
+    alignSelf: "center",
   },
   heroTitle: {
-    fontSize: SIZES.font.xxxl,
-    fontFamily: "Lato",
+    position: "absolute",
+    fontWeight: "700",
+    zIndex: -1,
+    fontSize: SIZES.font.xxxl * 2,
+    alignSelf: "center",
+    color: COLORS.primary400,
+  },
+  bottomSheetBackground: {
+    borderRadius: SIZES.radius.xl,
+    backgroundColor: COLORS.primary200,
+  },
+  bottomSheetContent: {
+    flex: 1,
+    paddingHorizontal: SIZES.padding.lg,
+  },
+  bottomSheetHeader: {
+    padding: SIZES.padding.lg,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  bottomSheetTitle: {
+    color: COLORS.primary500,
+    opacity: 0.6,
+    fontSize: SIZES.font.xxl,
+    fontWeight: "600",
+  },
+  bottomSheetBody: {
+    flex: 1,
+    backgroundColor: COLORS.primary100,
+    borderTopEndRadius: SIZES.radius.xxl,
+    borderTopStartRadius: SIZES.radius.xxl,
+    padding: SIZES.padding.xl,
+    paddingBottom: SIZES.padding.xxl,
+    justifyContent: "space-between",
+  },
+  sheetSections: {
+    gap: SIZES.padding.lg,
+  },
+  detailCard: {
+    flex: 1,
+    padding: SIZES.padding.md,
+    paddingHorizontal: SIZES.padding.xl,
+    borderRadius: SIZES.radius.lg,
+    backgroundColor: COLORS.primary100,
+  },
+  detailTitle: {
+    fontSize: SIZES.font.xxl + 8,
     fontWeight: "700",
     color: COLORS.primary500,
+    opacity: 0.6,
+    alignSelf: "center",
   },
-  heroSubtitle: {
-    fontFamily: "Lato",
+  divider: {
+    height: 1,
+    width: "100%",
+    marginVertical: SIZES.padding.lg,
+    backgroundColor: COLORS.primary200,
+  },
+  detailBody: {
+    flex: 1,
+    justifyContent: "space-between",
+  },
+  detailDescription: {
     fontSize: SIZES.font.md,
-    color: COLORS.primary400,
-    textAlign: "center",
-    opacity: 0.7,
-  },
-  section: {
-    paddingHorizontal: SIZES.padding.xl,
-    paddingBottom: SIZES.padding.lg,
-  },
-  sectionTitle: {
-    fontFamily: "Lato",
-    fontSize: SIZES.font.lg,
-    fontWeight: "600",
+    fontWeight: "400",
     color: COLORS.primary500,
-    marginBottom: SIZES.padding.sm,
+    opacity: 0.5,
   },
-  chipGroup: {
+  nutritionRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: SIZES.padding.sm,
-  },
-  chip: {
-    paddingVertical: SIZES.padding.sm,
-    paddingHorizontal: SIZES.padding.md,
-    borderRadius: SIZES.radius.md,
+    justifyContent: "center",
     alignItems: "center",
+    flexWrap: "wrap",
+    gap: SIZES.padding.xs,
   },
-  chipLabel: {
-    fontFamily: "Lato",
-    fontSize: SIZES.font.md,
-    color: COLORS.primary500,
-  },
-  chipPrice: {
-    fontFamily: "Lato",
-    fontSize: SIZES.font.sm,
-    color: COLORS.primary400,
+  nutritionIcon: {
+    position: "absolute",
+    left: 0,
   },
   nutritionText: {
-    fontFamily: "Lato",
-    fontSize: SIZES.font.sm,
-    color: COLORS.primary400,
-  },
-  suggestionCard: {
-    width: 120,
-    borderRadius: SIZES.radius.md,
-    overflow: "hidden",
-    backgroundColor: `${COLORS.primary200}55`,
-  },
-  suggestionImage: {
-    width: "100%",
-    height: 80,
-  },
-  suggestionLabel: {
-    padding: SIZES.padding.sm,
-    fontFamily: "Lato",
-    fontSize: SIZES.font.sm,
     color: COLORS.primary500,
+    fontWeight: "500",
   },
-  footer: {
-    padding: SIZES.padding.lg,
-    paddingBottom: SIZES.padding.xl,
-    backgroundColor: COLORS.primary100,
+  priceRow: {
     flexDirection: "row",
-    alignItems: "center",
     justifyContent: "space-between",
-    gap: SIZES.padding.md,
-  },
-  quantityContainer: {
-    flexDirection: "row",
     alignItems: "center",
-    gap: SIZES.padding.sm,
-  },
-  quantityButton: {
-    width: 36,
-    height: 36,
-    borderRadius: SIZES.radius.md,
-    backgroundColor: COLORS.primary200,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  quantityButtonText: {
-    fontFamily: "Lato",
-    fontSize: SIZES.font.lg,
-    color: COLORS.primary500,
-  },
-  quantityValue: {
-    fontFamily: "Lato",
-    fontSize: SIZES.font.lg,
-    color: COLORS.primary500,
-  },
-  addToCartButton: {
-    flex: 1,
-    borderRadius: SIZES.radius.lg,
     paddingVertical: SIZES.padding.md,
+  },
+  priceColumn: {
     alignItems: "center",
+  },
+  priceOriginal: {
+    fontSize: SIZES.font.md,
+    color: COLORS.primary500,
+    opacity: 0.6,
+    textDecorationStyle: "solid",
+    textDecorationColor: COLORS.primary500,
+    textDecorationLine: "line-through",
+  },
+  priceDiscounted: {
+    fontSize: SIZES.font.lg,
+    fontWeight: "600",
+    color: COLORS.primary500,
+    opacity: 0.6,
+  },
+  addButtonText: {
+    fontWeight: "500",
+    fontSize: SIZES.font.xl,
+    color: COLORS.primary500,
+    opacity: 0.6,
   },
   addToCartText: {
-    fontFamily: "Lato",
+    fontSize: SIZES.font.md,
+    color: COLORS.primary100,
+    fontWeight: "700",
+  },
+  optionSection: {
+    gap: SIZES.padding.md,
+  },
+  optionLabel: {
+    fontSize: SIZES.font.md,
+    fontWeight: "600",
+    color: COLORS.primary400,
+    opacity: 0.6,
+  },
+  segmentedGroup: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 2,
+  },
+  selectionButton: {
+    paddingVertical: SIZES.padding.lg,
+    paddingHorizontal: SIZES.padding.md,
+    alignItems: "center",
+    minWidth: 96,
+  },
+  selectionButtonLeft: {
+    borderTopLeftRadius: SIZES.radius.md,
+    borderBottomLeftRadius: SIZES.radius.md,
+  },
+  selectionButtonRight: {
+    borderTopRightRadius: SIZES.radius.md,
+    borderBottomRightRadius: SIZES.radius.md,
+  },
+  optionKey: {
+    fontSize: SIZES.font.md,
+    fontWeight: "500",
+    opacity: 0.8,
+  },
+  optionValue: {
+    fontSize: SIZES.font.md,
+    fontWeight: "700",
+    opacity: 1,
+  },
+  suggestionsList: {
+    gap: SIZES.padding.md,
+  },
+  suggestionCard: {
+    borderRadius: SIZES.radius.md,
+    overflow: "hidden",
+  },
+  suggestionImage: {
+    width: 150,
+    height: 150,
+  },
+  suggestionOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    top: 0,
+    padding: SIZES.padding.md,
+    justifyContent: "space-between",
+    backgroundColor: "#00000044",
+  },
+  suggestionText: {
     fontSize: SIZES.font.lg,
     color: COLORS.primary100,
-    fontWeight: "600",
+    fontWeight: "500",
+  },
+  fallbackContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.primary100,
+  },
+  fallbackText: {
+    fontFamily: "Lato",
+    color: COLORS.primary500,
   },
 });

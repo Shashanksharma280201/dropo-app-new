@@ -53,14 +53,14 @@ const mockProductsByCategory: Record<string, ProductListItem[]> = {
       id: "prod-cappuccino",
       slug: "classic-cappuccino",
       name: "Classic Cappuccino",
-      imageUrl: "https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=640&q=80",
+      imageUrl: "",
       price: 210,
     },
     {
       id: "prod-iced-latte",
       slug: "iced-vanilla-latte",
       name: "Iced Vanilla Latte",
-      imageUrl: "https://images.unsplash.com/photo-1527169402691-feff5539e52c?auto=format&fit=crop&w=640&q=80",
+      imageUrl: "",
       price: 230,
     },
   ],
@@ -69,14 +69,14 @@ const mockProductsByCategory: Record<string, ProductListItem[]> = {
       id: "prod-herbal-tea",
       slug: "herbal-green-tea",
       name: "Herbal Green Tea",
-      imageUrl: "https://images.unsplash.com/photo-1502741126161-b048400d2045?auto=format&fit=crop&w=640&q=80",
+      imageUrl: "",
       price: 140,
     },
     {
       id: "prod-masala-chai",
       slug: "masala-chai",
       name: "Masala Chai",
-      imageUrl: "https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=640&q=80",
+      imageUrl: "",
       price: 120,
     },
   ],
@@ -85,14 +85,14 @@ const mockProductsByCategory: Record<string, ProductListItem[]> = {
       id: "prod-veggie-sandwich",
       slug: "veggie-sandwich",
       name: "Veggie Sandwich",
-      imageUrl: "https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=640&q=80",
+      imageUrl: "",
       price: 190,
     },
     {
       id: "prod-croissant",
       slug: "almond-croissant",
       name: "Almond Croissant",
-      imageUrl: "https://images.unsplash.com/photo-1515003197210-e0cd71810b5f?auto=format&fit=crop&w=640&q=80",
+      imageUrl: "",
       price: 160,
     },
   ],
@@ -316,36 +316,13 @@ const mockProductDetails: Record<string, ProductDetail> = {
 };
 
 const mockCart: CartResponse = {
-  items: [
-    {
-      id: "cart-line-1",
-      quantity: 1,
-      unitPrice: 230,
-      lineTotal: 230,
-      product: {
-        id: mockProductsByCategory.coffee[0].id,
-        name: mockProductsByCategory.coffee[0].name,
-        slug: mockProductsByCategory.coffee[0].slug,
-        imageUrl: mockProductsByCategory.coffee[0].imageUrl,
-      },
-      variant: { id: "var-cap-regular", name: "Regular", price: 210 },
-      addons: [
-        {
-          id: "milk-oat",
-          name: "Oat milk",
-          priceDelta: 20,
-          group: { id: "milk-choice", name: "Milk choice" },
-        },
-      ],
-      notes: null,
-    },
-  ],
+  items: [],
   summary: {
-    subtotal: 230,
-    tax: 12,
-    deliveryFee: 20,
+    subtotal: 0,
+    tax: 0,
+    deliveryFee: 0,
     discount: 0,
-    total: 262,
+    total: 0,
   },
 };
 

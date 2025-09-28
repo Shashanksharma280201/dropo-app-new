@@ -154,7 +154,7 @@ const Header = ({ palette }: { palette: Palette }) => (
     </View>
     <View style={styles.headerActions}>
       <Pressable
-        onPress={() => router.push("/(protected)/profile")}
+        onPress={() => router.push("/(protected)/orders")}
         style={({ pressed }) => [
           styles.iconButton,
           {
@@ -162,7 +162,7 @@ const Header = ({ palette }: { palette: Palette }) => (
           },
         ]}
       >
-        <Icon icon="person" size={24} />
+        <Icon icon="bag" size={24} />
       </Pressable>
       <Pressable
         onPress={() => router.push("/(protected)/cart")}
@@ -173,7 +173,18 @@ const Header = ({ palette }: { palette: Palette }) => (
           },
         ]}
       >
-        <Icon icon="bag" size={24} />
+        <Icon icon="burger" size={24} />
+      </Pressable>
+      <Pressable
+        onPress={() => router.push("/(protected)/profile")}
+        style={({ pressed }) => [
+          styles.iconButton,
+          {
+            backgroundColor: pressed ? palette.primary300 : palette.primary200,
+          },
+        ]}
+      >
+        <Icon icon="person" size={24} />
       </Pressable>
     </View>
   </View>

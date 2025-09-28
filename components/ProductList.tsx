@@ -11,6 +11,7 @@ import { router } from "expo-router";
 
 import { COLORS } from "@/constants/Colors";
 import { SIZES } from "@/constants/sizes";
+import { getProductImageSource } from "@/lib/productImages";
 import type { ProductListItem } from "@/lib/types";
 
 const Coffee = require("@/assets/images/coffee.png");
@@ -118,9 +119,13 @@ const ProductCard = ({
     router.push({ pathname: "/(protected)/product/[slug]", params: { slug: item.slug } });
   };
 
-  const source: ImageSourcePropType = item.imageUrl
-    ? { uri: item.imageUrl }
-    : fallbackImages[index % fallbackImages.length];
+  const fallbackImage = fallbackImages[index % fallbackImages.length];
+
+  const source: ImageSourcePropType = getProductImageSource({
+    slug: item.slug,
+    imageUrl: item.imageUrl,
+    fallback: fallbackImage,
+  });
 
   return (
     <Pressable
