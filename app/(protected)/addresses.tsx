@@ -39,10 +39,12 @@ export default function AddressesScreen() {
         const { data } = await api.get<AddressResponse[]>("/users/me/addresses");
         return data;
       } catch {
+        const cached = queryClient.getQueryData<AddressResponse[]>(["addresses"]);
+        if (cached) return cached;
         return getMockProfile().addresses;
       }
     },
-    initialData: getMockProfile().addresses,
+    initialData: () => getMockProfile().addresses,
   });
 
   const profileQuery = useQuery<ProfileResponse>({
@@ -52,10 +54,11 @@ export default function AddressesScreen() {
         const { data } = await api.get<ProfileResponse>("/users/me");
         return data;
       } catch {
-        return getMockProfile();
+        const cached = queryClient.getQueryData<ProfileResponse>(["profile"]);
+        return cached ?? getMockProfile();
       }
     },
-    initialData: getMockProfile(),
+    initialData: () => getMockProfile(),
   });
 
   const addMutation = useMutation({

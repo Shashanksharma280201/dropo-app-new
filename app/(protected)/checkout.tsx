@@ -20,10 +20,11 @@ export default function CheckoutScreen() {
         const { data } = await api.get<CartResponse>("/cart");
         return data;
       } catch {
-        return getMockCart();
+        const cached = queryClient.getQueryData<CartResponse>(["cart"]);
+        return cached ?? getMockCart();
       }
     },
-    initialData: getMockCart(),
+    initialData: () => getMockCart(),
   });
 
   const profileQuery = useQuery<ProfileResponse>({
@@ -33,10 +34,11 @@ export default function CheckoutScreen() {
         const { data } = await api.get<ProfileResponse>("/users/me");
         return data;
       } catch {
-        return getMockProfile();
+        const cached = queryClient.getQueryData<ProfileResponse>(["profile"]);
+        return cached ?? getMockProfile();
       }
     },
-    initialData: getMockProfile(),
+    initialData: () => getMockProfile(),
   });
 
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);

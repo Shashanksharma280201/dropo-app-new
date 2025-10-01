@@ -23,10 +23,11 @@ export default function ProfileScreen() {
         const { data } = await api.get<ProfileResponse>("/users/me");
         return data;
       } catch {
-        return getMockProfile();
+        const cached = queryClient.getQueryData<ProfileResponse>(["profile"]);
+        return cached ?? getMockProfile();
       }
     },
-    initialData: getMockProfile(),
+    initialData: () => getMockProfile(),
   });
 
   const logoutMutation = useMutation({

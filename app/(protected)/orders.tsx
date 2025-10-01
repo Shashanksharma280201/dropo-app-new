@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 
 import { COLORS } from "@/constants/Colors";
@@ -8,6 +8,8 @@ import { getMockOrders } from "@/lib/mockData";
 import type { OrderResponse } from "@/lib/types";
 
 export default function OrdersScreen() {
+  const queryClient = useQueryClient();
+
   const ordersQuery = useQuery<OrderResponse[]>({
     queryKey: ["orders"],
     queryFn: async () => {
@@ -15,10 +17,11 @@ export default function OrdersScreen() {
         const { data } = await api.get<OrderResponse[]>("/orders");
         return data;
       } catch {
-        return getMockOrders();
+        const cached = queryClient.getQueryData<OrderResponse[]>(["orders"]);
+        return cached ?? getMockOrders();
       }
     },
-    initialData: getMockOrders(),
+    initialData: () => getMockOrders(),
   });
 
   return (

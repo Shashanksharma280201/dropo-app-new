@@ -21,10 +21,11 @@ export default function CartScreen() {
         const { data } = await api.get<CartResponse>("/cart");
         return data;
       } catch {
-        return getMockCart();
+        const cached = queryClient.getQueryData<CartResponse>(["cart"]);
+        return cached ?? getMockCart();
       }
     },
-    initialData: getMockCart(),
+    initialData: () => getMockCart(),
   });
 
   const updateItemMutation = useMutation({
